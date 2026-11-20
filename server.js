@@ -163,6 +163,98 @@ async function handleCreateTodo(req, res) {
 }
 
 /**
+ * Handles PATCH /api/todos/:id – updates the completion status of a todo.
+ *
+ * Validation sequence:
+ *   1. Content-Type must include application/json  → HTTP 400
+ *   2. Body must be valid JSON object              → HTTP 400
+ *   3. `completed` field must be present           → HTTP 400
+ *   4. `completed` must be a boolean               → HTTP 400
+ *   5. Todo with given id must exist               → HTTP 404
+ *
+ * On success updates todo.completed and responds with HTTP 200 and the
+ * updated todo object.
+ *
+ * @param {number} id  Parsed todo ID from the URL path
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @returns {Promise<void>}
+ */
+async function handleToggleTodo(id, req, res) {
+  // 1. Require Content-Type: application/json
+  const contentType = req.headers['content-type'] || '';
+  if (!contentType.includes('application/json')) {
+    sendJson(res, 400, { error: 'Content-Type must be application/json' });
+    return;
+  }
+
+  // 2. Read and parse the request body
+  let parsed;
+  try {
+    const rawBody = await readRequestBody(req);
+    parsed = JSON.parse(rawBody);
+  } catch (err) {
+    if (err.code === 'PAYLOAD_TOO_LARGE') {
+      sendJson(res, 413, { error: 'Payload Too Large' });
+    } else {
+      sendJson(res, 400, { error: 'Invalid JSON' });
+    }
+    return;
+  }
+
+  // 3. Body must be a plain JSON object (not null, array, or primitive)
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    sendJson(res, 400, { error: 'Request body must be a JSON object' });
+    return;
+  }
+
+  // 4. `completed` field must be present
+  if (!Object.prototype.hasOwnProperty.call(parsed, 'completed')) {
+    sendJson(res, 400, { error: 'Missing completed field' });
+    return;
+  }
+
+  // 5. `completed` must be a boolean (not truthy/falsy)
+  if (typeof parsed.completed !== 'boolean') {
+    sendJson(res, 400, { error: 'Completed must be boolean' });
+    return;
+  }
+
+  // Find the todo by ID; return 404 if absent
+  const todo = todos.find((t) => t.id === id);
+  if (!todo) {
+    sendJson(res, 404, { error: 'Todo not found' });
+    return;
+  }
+
+  // Apply update and respond with the updated object
+  todo.completed = parsed.completed;
+  sendJson(res, 200, todo);
+}
+
+/**
+ * Handles DELETE /api/todos/:id – removes a todo from the in-memory list.
+ *
+ * Returns HTTP 204 (No Content) on success.
+ * Returns HTTP 404 if no todo with the given id exists.
+ *
+ * @param {number} id  Parsed todo ID from the URL path
+ * @param {http.ServerResponse} res
+ */
+function handleDeleteTodo(id, res) {
+  const index = todos.findIndex((t) => t.id === id);
+  if (index === -1) {
+    sendJson(res, 404, { error: 'Todo not found' });
+    return;
+  }
+
+  // Remove the todo and respond with 204 No Content (empty body)
+  todos.splice(index, 1);
+  res.writeHead(204);
+  res.end();
+}
+
+/**
  * Central request dispatcher.  Parses the incoming URL path and HTTP method
  * then routes to the matching handler.  Any unrecognised path / method
  * combination returns a JSON 404 response.
@@ -212,12 +304,18 @@ function handleRequest(req, res) {
   // ── /api/todos/:id  (resource)  ───────────────────────────────────────
   const idMatch = /^\/api\/todos\/(\d+)$/.exec(url);
   if (idMatch) {
+    const id = parseInt(idMatch[1], 10);
     if (method === 'PATCH') {
-      sendJson(res, 404, { error: 'Not found' });
+      handleToggleTodo(id, req, res).catch((err) => {
+        console.error('Unhandled error in handleToggleTodo:', err);
+        if (!res.headersSent) {
+          sendJson(res, 500, { error: 'Internal server error' });
+        }
+      });
       return;
     }
     if (method === 'DELETE') {
-      sendJson(res, 404, { error: 'Not found' });
+      handleDeleteTodo(id, res);
       return;
     }
     sendJson(res, 405, { error: 'Method not allowed' });
