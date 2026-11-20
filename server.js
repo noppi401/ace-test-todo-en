@@ -91,6 +91,78 @@ function sendJson(res, status, data) {
 }
 
 /**
+ * Handles POST /api/todos – creates a new todo from the JSON request body.
+ *
+ * Validation sequence:
+ *   1. Content-Type must include application/json  → HTTP 400
+ *   2. Body must be valid JSON object              → HTTP 400
+ *   3. `title` field must be present               → HTTP 400
+ *   4. `title` after trimming must be non-empty    → HTTP 400
+ *   5. `title` after trimming must be ≤ 500 chars  → HTTP 400
+ *   6. Body size must not exceed MAX_BODY_SIZE      → HTTP 413
+ *
+ * On success creates the todo, appends it to `todos`, and responds
+ * with HTTP 201 and the new todo object.
+ *
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @returns {Promise<void>}
+ */
+async function handleCreateTodo(req, res) {
+  // 1. Require Content-Type: application/json
+  const contentType = req.headers['content-type'] || '';
+  if (!contentType.includes('application/json')) {
+    sendJson(res, 400, { error: 'Content-Type must be application/json' });
+    return;
+  }
+
+  // 2. Read and parse the request body
+  let parsed;
+  try {
+    const rawBody = await readRequestBody(req);
+    parsed = JSON.parse(rawBody);
+  } catch (err) {
+    if (err.code === 'PAYLOAD_TOO_LARGE') {
+      sendJson(res, 413, { error: 'Payload Too Large' });
+    } else {
+      sendJson(res, 400, { error: 'Invalid JSON' });
+    }
+    return;
+  }
+
+  // 3. Body must be a plain JSON object (not null, array, or primitive)
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    sendJson(res, 400, { error: 'Request body must be a JSON object' });
+    return;
+  }
+
+  // 4. `title` field must be present
+  if (!Object.prototype.hasOwnProperty.call(parsed, 'title')) {
+    sendJson(res, 400, { error: 'Missing title field' });
+    return;
+  }
+
+  // 5. Title must be non-empty after trimming surrounding whitespace
+  const title = String(parsed.title).trim();
+  if (title.length === 0) {
+    sendJson(res, 400, { error: 'Title cannot be empty' });
+    return;
+  }
+
+  // 6. Title length guard (max 500 characters after trim)
+  if (title.length > 500) {
+    sendJson(res, 400, { error: 'Title too long' });
+    return;
+  }
+
+  // Atomically assign ID and persist (single-threaded; no lock needed)
+  const todo = { id: nextId++, title, completed: false };
+  todos.push(todo);
+
+  sendJson(res, 201, todo);
+}
+
+/**
  * Central request dispatcher.  Parses the incoming URL path and HTTP method
  * then routes to the matching handler.  Any unrecognised path / method
  * combination returns a JSON 404 response.
@@ -125,7 +197,12 @@ function handleRequest(req, res) {
       return;
     }
     if (method === 'POST') {
-      sendJson(res, 404, { error: 'Not found' });
+      handleCreateTodo(req, res).catch((err) => {
+        console.error('Unhandled error in handleCreateTodo:', err);
+        if (!res.headersSent) {
+          sendJson(res, 500, { error: 'Internal server error' });
+        }
+      });
       return;
     }
     sendJson(res, 405, { error: 'Method not allowed' });
