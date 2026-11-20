@@ -121,7 +121,7 @@ function handleRequest(req, res) {
   // ── /api/todos  (collection)  ─────────────────────────────────────────
   if (url === '/api/todos') {
     if (method === 'GET') {
-      sendJson(res, 404, { error: 'Not found' });
+      sendJson(res, 200, todos);
       return;
     }
     if (method === 'POST') {
