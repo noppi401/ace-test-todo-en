@@ -339,7 +339,7 @@ function startServer(port = 3000) {
   return new Promise((resolve, reject) => {
     server.on('error', reject);
     server.listen(port, () => {
-      console.log(`Server listening on port ${port}`);
+      console.log(`Server listening on port ${server.address().port}`);
       resolve(server);
     });
   });
